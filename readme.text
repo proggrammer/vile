@@ -1,0 +1,134 @@
+Vile: Vile is destined to become core of any business intelligence system:
+
+Usecase: In business intelligence dynamic tools, mostly we hit same problem of selecting multiple filters based on
+parameters and then give insights by aggregating based on unit of time (day/month/year) and selected filters.
+
+This becomes heavy with big amount of data. This system help you transform simple table which are not efficient for
+multiple filter as they are linear in nature; one data structure is designed especially for helping this particular
+scenario.
+
+Vile transforms the full table based data into faster datastructure, so in "most of cases" any such query will take
+constant time instead of linear time.
+
+To understand this system we will see "input" and "output", "how does it work" is your homework.
+=========================================================INPUT==========================================================
+
+Input is a table called "dog" (small data is taken to make this doc simpler):
+
++----------------+--------+-----------+------------+------------+--------+------------+
+| breed          | colour | location  | price      | profit     | weight | date       |
++----------------+--------+-----------+------------+------------+--------+------------+
+| German Sheperd | brown  | siliguri  | 20066.7900 |  5600.7700 | 4.5000 | 2018-01-01 |
+| German Sheperd | brown  | kolkata   | 20020.7900 |  5100.7700 | 4.2000 | 2018-01-02 |
+| Poodle         | black  | kolkata   | 80034.5500 | 10600.7800 | 2.5000 | 2018-01-01 |
+| Poodle         | black  | kolkata   | 80034.5500 | 10600.7800 | 2.5000 | 2018-01-02 |
+| Poodle         | black  | bangalore | 80034.5500 | 10600.7800 | 2.5000 | 2018-01-02 |
+| Poodle         | white  | bangalore | 80034.5500 | 10600.7800 | 2.5000 | 2018-01-02 |
+| Indie          | red    | pune      |    34.5500 |     0.0000 | 6.5000 | 2018-01-01 |
+| Indie          | red    | pune      |    34.5500 |     0.0000 | 4.2000 | 2018-01-01 |
++----------------+--------+-----------+------------+------------+--------+------------+
+
+
+We take config.properties as :
+File - config.properties
+
+partitionField=date:String
+nonValueFieldList=breed:String,colour:String,location:String
+valueFieldList=price:Double:sum:revenue,profit:Double:sum:totalProfit,weight:Double:average:avgWeight
+inputUrl=jdbc:mysql://localhost
+inputDbName=vile
+inputTableName=dogs
+inputUserName=userName
+inputPassword=password
+outputUrl=localhost
+outputDbName=vile
+outputTableName=dogs
+
+=======================================================OUTPUT===========================================================
+In mongo vile db, collection name is dog: Date column contains two unique values, so if we use this system to partition
+data based on dates and then apply the system, then we get output as, each of the document denotes a days data in
+efficient format:
+
+{
+    "_id" : "dogs/date/2018-01-01",
+    "smartIndicesForFieldList" : {
+        "location" : {"siliguri" : [0], "pune" : [ 2, 3], "kolkata" : [ 1 ]},
+        "breed" : { "Indie" : [ 2, 3], "Poodle" : [ 1 ], "German Sheperd" : [ 0 ]},
+        "colour" : { "red" : [ 2, 3 ], "black" : [ 1 ], "brown" : [ 0 ] }
+    },
+    "valuesWithIndicesList" : {
+        "price" : [ 20066.79, 80034.55, 34.55, 34.55 ],
+        "weight" : [ 4.5, 2.5, 6.5, 4.2 ],
+        "profit" : [ 5600.77, 10600.78, 0, 0 ]
+    },
+    "aggregatedValueList" : {
+        "revenue" : 100170.44,
+        "totalProfit" : 16201.55,
+        "avgWeight" : 4.425
+    }
+}
+
+{
+    "_id" : "dogs/date/2018-01-02",
+    "smartIndicesForFieldList" : {
+        "location" : { "bangalore" : [ 2, 3 ], "kolkata" : [ 0, 1 ] },
+        "breed" : { "Poodle" : [ 1, 2, 3 ], "German Sheperd" : [ 0 ] },
+        "colour" : { "white" : [ 3 ], "black" : [ 1, 2 ], "brown" : [ 0 ] }
+    },
+    "valuesWithIndicesList" : {
+        "price" : [ 20020.79, 80034.55, 80034.55, 80034.55 ],
+        "weight" : [ 4.2, 2.5, 2.5, 2.5 ],
+        "profit" : [ 5100.77, 10600.78, 10600.78, 10600.78 ]
+    },
+    "aggregatedValueList" : {
+        "revenue" : 260124.44,
+        "totalProfit" : 36903.11,
+        "avgWeight" : 2.925
+    }
+}
+
+======================================================DETAILS===========================================================
+Explaining config.properties: config.properties is responsible for all inputs except the input table,
+each of the key value pair is explained:
+
+partitionField=what field you want to partition each document, it can be date most of the time,
+                        if date contains time then you have get rid of time for day based system.
+                        format - fieldName:datatype
+nonValueFieldList=all filtering fields as name:datatype separated by comma
+valueFieldList=this contains same as valueFieldList but also contains the new fieldName, for example revenue comes after
+summing up all prices, so column name would be price, and name would be revenue, and datatype would be Double and
+aggregate function is sum. Aggregate function can also be avg in this version.
+inputUrl=mysqlDB url
+inputDbName=vile //All fields below are self explanatory
+inputTableName=dogs
+inputUserName=anchor
+inputPassword=anchor
+outputUrl=localhost
+outputDbName=vile
+outputTableName=dogs
+
+======================================================How to Query on this DataStructure code in Machine.scala===============================================
+
+  def query(queryFieldName: String, filters: Map[String, List[Any]], vileDS: VileDS, aggregator: Aggregator.functionName,
+            dataType: DataTypes.types): Any = {
+    //filterout any filedname which doesnt have any filter selected
+    val cleanFilter = filters.toList.filter(kv => kv._2 != null && !kv._2.isEmpty)
+    //if no filters selected, get values directed from the aggregatedValueList
+
+    if(cleanFilter == null || cleanFilter.isEmpty) return vileDS.aggregatedValueList.getOrElse(queryFieldName, null)
+    else{
+      //get all contextual indices to the field which needs to be aggregated
+      val setOfSet: Set[Int] = cleanFilter.map(kv => kv._2.map(v => vileDS.smartIndicesForFieldList.getOrElse(kv._1, null)
+        .getOrElse(v, null).toSet)
+        .reduce(_ union _))
+        .reduce(_ intersect _)
+      //get the values in context
+      val resultValueList:List[Any] = setOfSet.toList.map(index => vileDS.valuesWithIndicesList.get(queryFieldName)
+        .get(index))
+      //aggregate
+      val result = VileCore.aggregateEach((resultValueList, aggregator, dataType))
+      result
+    }
+  }
+
+==============================================================================================================================================================
